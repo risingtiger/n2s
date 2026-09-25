@@ -1,0 +1,16 @@
+{
+	"name": "sizetest-n2server",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"start": "bun run index.ts",
+		"dev": "bun --watch index.ts",
+		"debug": "bun --inspect-brk index.ts",
+		"dist": "NODE_ENV=dist bun run index.ts",
+		"distdebug": "NODE_ENV=dist bun --inspect-brk index.ts",
+		"buildndist": "(cd ../n2build && cargo run alldev && cargo run dist) && NODE_ENV=dist bun run index.ts"
+	},
+	"devDependencies": {
+		"@types/bun": "^1.4.0"
+	}
+}
