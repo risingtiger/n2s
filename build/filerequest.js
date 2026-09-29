@@ -14,7 +14,7 @@ const FILE_CONTENT_TYPES = {
     ".woff2": "font/woff2"
 };
 export const GeneralAssetFile = async (fileurl, res, basepath, static_dir, nocache = true, _is_prod = false)=>{
-    const pathname = new URL(fileurl, "http://localhost").pathname;
+    const pathname = new URL(fileurl).pathname;
     const file_path = path_util.resolve(basepath, static_dir, "." + pathname);
     const file = Bun.file(file_path);
     if (!await file.exists()) return false;

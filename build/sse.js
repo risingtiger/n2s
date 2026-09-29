@@ -1,105 +1,51 @@
+const encoder = new TextEncoder();
 const listeners = new Map();
-let isshuttingdown = false;
-function Add_Listener(req, res) {
-    if (isshuttingdown) {
-        res.statusCode = 503;
-        res.end();
-        return;
+export function AddListener(req, localdb_scope) {
+    let heartbeat;
+    let controller;
+    function cleanup() {
+        clearInterval(heartbeat);
+        listeners.delete(controller);
+        req.signal.removeEventListener("abort", on_abort);
     }
-    const id = req.query.id;
-    const l = listeners.get(id);
-    if (l) {
-        listeners.delete(id);
+    function on_abort() {
+        cleanup();
+        controller.close();
     }
-    listeners.set(id, {
-        id,
-        cb: (trigger, data)=>{
-            res.write(`event: ${trigger}\n`);
-            res.write(`data: ${JSON.stringify(data)}\n`);
-            res.write('\n');
+    const stream = new ReadableStream({
+        start (stream_controller) {
+            controller = stream_controller;
+            listeners.set(controller, localdb_scope);
+            controller.enqueue(encoder.encode(": connected\nretry: 15000\n\n"));
+            // Stay below Bun's default 10-second idle timeout.
+            heartbeat = setInterval(()=>controller.enqueue(encoder.encode(": heartbeat\n\n")), 5000);
+            req.signal.addEventListener("abort", on_abort, {
+                once: true
+            });
         },
-        endit: ()=>{
-            res.end();
-        },
-        checkit: ()=>{
-            if (res.writable && !res.destroyed && !res.writableEnded) {
-                res.write(':\n\n'); // Send a comment to keep the connection alive
-            } else {
-                cleanUp(id);
-            }
+        cancel: cleanup
+    });
+    return new Response(stream, {
+        headers: {
+            "Content-Type": "text/event-stream; charset=UTF-8",
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive"
         }
     });
-    console.info(`New SSE listener: ${id} with listeners count: ${listeners.size}`);
-    res.socket.setNoDelay(true);
-    res.writeHead(200, {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
-        'Connection': "keep-alive",
-        'Access-Control-Allow-Origin': '*'
-    });
-    res.write('event: connected\n');
-    res.write('data: { "message": "hey connected" }\n');
-    res.write('retry: 15000\n');
-    res.write('\n');
-    req.on('close', ()=>{
-        cleanUp(id);
-    });
-    req.on('finish', ()=>{
-        cleanUp(id);
-    });
-    req.on('error', ()=>{
-        console.log("req.on error");
-        cleanUp(id);
-    });
 }
-function TriggerEvent(eventname, data, opts = {}) {
-    listeners.forEach((l)=>{
-        if (opts.exclude && opts.exclude.includes(l.id)) return;
-        l.cb(eventname, data);
-    });
+// Publish resource keys after the corresponding write commits. No record data is sent.
+// Unhandled Case: scope listeners by authenticated tenant before broadcasting tenant-specific keys.
+// Unhandled Case: distribute notifications between server processes when running multiple instances.
+export function NotifyChanged(paths) {
+    if (!paths.length) return;
+    SendEvent("changed", paths);
 }
-function TriggerEventOne(eventname, sse_id, data) {
-    const listener = listeners.get(sse_id);
-    if (!listener) return false;
-    listener.cb(eventname, data);
-    return true;
+// Separate named protocols can share the connection. Only the legacy changed event
+// broadcasts without a scope; localdb record data always supplies an authenticated scope.
+export function SendEvent(event, data, scope) {
+    const message = encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    for (const [listener, listener_scope] of listeners){
+        if (scope !== undefined && listener_scope !== scope) continue;
+        listener.enqueue(message);
+    }
 }
-function cleanUp(id) {
-    const listener = listeners.get(id);
-    if (!listener) return;
-    listener.endit();
-    listeners.delete(id);
-}
-function routinemaintenance() {
-    listeners.forEach((l)=>{
-        l.checkit();
-    });
-}
-setTimeout(routinemaintenance, 30000);
-/*
-function remove_listener(l:Listener) {
-
-    l.httpres.destroy()
-    listeners.delete(l.unique_identifier)
-}
-*/ process.on('SIGTERM', ()=>{
-    isshuttingdown = true;
-    console.info('Received SIGTERM signal. Cleaning up SSE listeners.');
-    listeners.forEach((listener)=>{
-        try {
-            listener.endit();
-            listeners.delete(listener.id);
-        } catch (e) {
-            console.error(`Error while ending listener ${listener.id}:`, e);
-        }
-    });
-    listeners.clear();
-    setTimeout(()=>{
-        process.exit(0);
-    }, 5000);
-});
-export default {
-    Add_Listener,
-    TriggerEvent,
-    TriggerEventOne
-};

@@ -12,13 +12,13 @@ export async function ThirdPartyLoad(name, basepath, static_dir, lazyloads, is_p
     if (cached !== undefined) return {
         returnstr: cached
     };
-    const returnstr = await bundle_javascript(absolute_file);
+    const returnstr = await bundle_thirdparty_javascript(absolute_file);
     _cached_thirdparty_files.set(absolute_file, returnstr);
     return {
         returnstr
     };
 }
-const bundle_javascript = async (file)=>{
+const bundle_thirdparty_javascript = async (file)=>{
     const result = await Bun.build({
         entrypoints: [
             file

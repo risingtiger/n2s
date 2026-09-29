@@ -20,7 +20,8 @@ export function IsViewEntry(js_path) {
     return /^(?:instance\/)?lazy\/views\/([^/]+)\/\1\.js$/.test(js_path);
 }
 export function MatchView(viewpath, lazyloads) {
-    const url = new URL(viewpath.replace(/^\/v\//, ""), "http://localhost/");
+    // This origin is only used to parse relative view paths, never for requests.
+    const url = new URL(viewpath.replace(/^\/v\//, ""), "https://example.invalid/");
     const pathname = url.pathname.slice(1);
     const views = lazyloads.filter((lazyload)=>lazyload.type === "view" && lazyload.urlmatch);
     const specificity = (view)=>view.urlmatch.replace(/:([a-zA-Z_0-9]+)/g, "").length;

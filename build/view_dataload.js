@@ -1,9 +1,10 @@
 import * as path_util from "node:path";
 import { pathToFileURL } from "node:url";
 import "./fetchlassie.js";
-export async function ViewDataLoad(viewpath, basepath, static_dir, lazyloads, is_prod) {
+import { URLBase } from "./url_base.js";
+export async function ViewDataLoad(viewpath, basepath, static_dir, lazyloads, is_prod, request_url) {
     const absolute_prefix = path_util.resolve(basepath, static_dir);
-    const url = new URL(viewpath, "http://localhost/");
+    const url = new URL(viewpath, URLBase(basepath, request_url));
     const pathname = url.pathname.replace(/^\/(?:v\/)?/, "");
     const view = match_view(pathname, lazyloads);
     if (!view) throw new Error(`Lazyload view not found: ${viewpath}`);
@@ -18,8 +19,11 @@ export async function ViewDataLoad(viewpath, basepath, static_dir, lazyloads, is
         module.post_load?.(pathparams, searchparams) ?? {}
     ]);
     return {
-        ...load_data,
-        ...post_load_data
+        data: {
+            ...load_data,
+            ...post_load_data
+        },
+        refreshon: []
     };
 }
 function match_view(pathname, lazyloads) {

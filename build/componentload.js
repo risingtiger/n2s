@@ -1,4 +1,5 @@
 import * as path_util from "node:path";
+import { EscapeTemplateAsset } from "./inline_template.js";
 const _cached_component_asset_files = new Map();
 export async function ComponentLoad(name, basepath, static_dir, lazyloads, is_prod) {
     const component = [
@@ -16,13 +17,13 @@ export async function ComponentLoad(name, basepath, static_dir, lazyloads, is_pr
         returnstr: cached
     };
     // Only this component entry and its JS imports are bundled, not its declared dependencies.
-    const returnstr = await bundle_javascript(absolute_prefix, file, is_prod);
+    const returnstr = await bundle_component_javascript(absolute_prefix, file, is_prod);
     _cached_component_asset_files.set(cache_key, returnstr);
     return {
         returnstr
     };
 }
-const bundle_javascript = async (absolute_prefix, file, is_prod)=>{
+const bundle_component_javascript = async (absolute_prefix, file, is_prod)=>{
     const result = await Bun.build({
         entrypoints: [
             path_util.resolve(absolute_prefix, file)
@@ -57,7 +58,7 @@ const bundle_javascript = async (absolute_prefix, file, is_prod)=>{
                         const css_url = "/" + path_util.relative(absolute_prefix, base + ".css").split(path_util.sep).join("/");
                         const style = is_prod ? `<style>${css}</style>` : `<link rel="stylesheet" href="${css_url}">`;
                         return {
-                            contents: js.replace(/\{--html--\}|\{--css(?:--)?\}/g, (placeholder)=>escape_template(placeholder === "{--html--}" ? html : style)),
+                            contents: js.replace(/\{--html--\}|\{--css(?:--)?\}/g, (placeholder)=>EscapeTemplateAsset(placeholder === "{--html--}" ? html : style)),
                             loader: "js"
                         };
                     });
@@ -68,7 +69,3 @@ const bundle_javascript = async (absolute_prefix, file, is_prod)=>{
     if (!result.success) throw new AggregateError(result.logs, "Could not assemble component assets");
     return result.outputs[0].text();
 };
-function escape_template(value) {
-    // Placeholders live in template literals; preserve ${...} for lit-html expressions.
-    return value.replace(/\\/g, "\\\\").replace(/`/g, "\\`");
-}

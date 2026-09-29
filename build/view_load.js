@@ -1,6 +1,8 @@
 import * as path_util from "node:path";
-export async function ViewLoad(viewurl, basepath, static_dir, lazyloads, is_prod) {
-    const pathname = new URL(viewurl, "http://localhost/").pathname.replace(/^\/(?:v\/)?/, "");
+import { EscapeTemplateAsset } from "./inline_template.js";
+import { URLBase } from "./url_base.js";
+export async function ViewLoad(viewurl, basepath, static_dir, lazyloads, is_prod, request_url) {
+    const pathname = new URL(viewurl, URLBase(basepath, request_url)).pathname.replace(/^\/(?:v\/)?/, "");
     const view = [
         ...lazyloads
     ].find((lazyload)=>{
@@ -18,34 +20,33 @@ export async function ViewLoad(viewurl, basepath, static_dir, lazyloads, is_prod
         "Cache-Control": "no-store"
     });
     if (!is_prod) {
-        const base = path_util.resolve(absolute_prefix, relative_base);
-        const [javascript, html] = await Promise.all([
-            Bun.file(base + ".js").text(),
-            Bun.file(base + ".html").text()
-        ]);
-        const css_url = "/" + relative_base.split(path_util.sep).join("/") + ".css";
-        const style = `<link rel="stylesheet" href="${css_url}">`;
-        const returnstr = javascript.replace(/\{--html--\}|\{--css(?:--)?\}/g, (placeholder)=>escape_template(placeholder === "{--html--}" ? html : style));
+        // Bundle relative viewpart imports so they resolve from the view source,
+        // not from this /api/view-load response URL.
+        const returnstr = await BundleViewJavascriptForDev(absolute_prefix, `${relative_base}.js`, false, true);
         return new Response(returnstr, {
             status: 200,
             headers
         });
     }
-    const paths = [
-        `${relative_base}.js.br`,
-        `${relative_base}.min.js`,
-        `${relative_base}.js`
-    ];
-    const path = await first_existing_path(absolute_prefix, paths);
-    if (path.endsWith(".br")) headers.set("Content-Encoding", "br");
-    return new Response(Bun.file(path_util.resolve(absolute_prefix, path)), {
+    const file = await GetViewJavascriptForDist(absolute_prefix, relative_base, true);
+    if (file.name?.endsWith(".br")) headers.set("Content-Encoding", "br");
+    return new Response(file, {
         status: 200,
         headers
     });
 }
-function escape_template(value) {
-    // Placeholders live in template literals; preserve ${...} for lit-html expressions.
-    return value.replace(/\\/g, "\\\\").replace(/`/g, "\\`");
+// Returns the prebuilt dist view file. Brotli is only offered when the caller can
+// serve it with a Content-Encoding header; inlining callers need plain text.
+export async function GetViewJavascriptForDist(absolute_prefix, relative_base, allow_br) {
+    const paths = [
+        ...allow_br ? [
+            `${relative_base}.js.br`
+        ] : [],
+        `${relative_base}.min.js`,
+        `${relative_base}.js`
+    ];
+    const path = await first_existing_path(absolute_prefix, paths);
+    return Bun.file(path_util.resolve(absolute_prefix, path));
 }
 async function first_existing_path(absolute_prefix, paths) {
     for (const path of paths){
@@ -54,3 +55,49 @@ async function first_existing_path(absolute_prefix, paths) {
     // View build outputs are required; let Bun return the missing fallback if none exist.
     return paths[paths.length - 1];
 }
+export const BundleViewJavascriptForDev = async (absolute_prefix, file, is_prod, include_core_styles = false)=>{
+    const result = await Bun.build({
+        entrypoints: [
+            path_util.resolve(absolute_prefix, file)
+        ],
+        target: "browser",
+        format: "esm",
+        splitting: false,
+        minify: false,
+        env: "disable",
+        plugins: [
+            {
+                name: "inline-view-assets",
+                setup (build) {
+                    build.onLoad({
+                        filter: /\.js$/
+                    }, async ({ path })=>{
+                        const js = await Bun.file(path).text();
+                        const has_html = js.includes("{--html--}");
+                        const has_css = /\{--css(?:--)?\}/.test(js);
+                        if (!has_html && !has_css) return {
+                            contents: js,
+                            loader: "js"
+                        };
+                        // Placeholder assets share the JS filename stem and directory, including imports.
+                        // Missing referenced assets fail the build; CSS URLs/@imports remain unchanged.
+                        const base = path.slice(0, -3);
+                        const [html, css] = await Promise.all([
+                            has_html ? Bun.file(base + ".html").text() : "",
+                            has_css && is_prod ? Bun.file(base + ".css").text() : ""
+                        ]);
+                        const css_url = "/" + path_util.relative(absolute_prefix, base + ".css").split(path_util.sep).join("/");
+                        const core_styles = include_core_styles && !is_prod ? '<link rel="stylesheet" href="/main.css"><link rel="stylesheet" href="/instance/main.css">' : "";
+                        const style = is_prod ? `<style>${css}</style>` : `${core_styles}<link rel="stylesheet" href="${css_url}">`;
+                        return {
+                            contents: js.replace(/\{--html--\}|\{--css(?:--)?\}/g, (placeholder)=>EscapeTemplateAsset(placeholder === "{--html--}" ? html : style)),
+                            loader: "js"
+                        };
+                    });
+                }
+            }
+        ]
+    });
+    if (!result.success) throw new AggregateError(result.logs, "Could not assemble view assets");
+    return result.outputs[0].text();
+};
